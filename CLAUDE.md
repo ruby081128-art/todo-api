@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Implemented: a FastAPI + SQLite Todo REST API. Stack choices made (package manager: pip + `requirements.txt`; ORM: SQLAlchemy).
+Implemented: a FastAPI + SQLite Todo REST API with JWT-based auth (each Todo belongs to the authenticated user). Stack choices made (package manager: pip + `requirements.txt`; ORM: SQLAlchemy).
 
 ## Commands
 
@@ -13,6 +13,9 @@ Implemented: a FastAPI + SQLite Todo REST API. Stack choices made (package manag
 python -m venv .venv
 .venv\Scripts\Activate.ps1        # Windows PowerShell
 pip install -r requirements.txt
+
+# Set a real secret in production — falls back to an insecure dev default otherwise
+# export SECRET_KEY=<random-value>   (Render: set via render.yaml's generateValue)
 
 # Run (dev server with reload)
 uvicorn app.main:app --reload
@@ -27,12 +30,15 @@ There is no linter, formatter, or automated test suite configured yet. If one is
 
 Small layered FastAPI app under `app/`:
 
-- `app/database.py` — SQLAlchemy engine/session setup. SQLite file `todos.db` is created in the project root on first run (`Base.metadata.create_all` in `main.py`, no migrations/Alembic).
-- `app/models.py` — SQLAlchemy `Todo` model plus `PriorityEnum` (low/medium/high). `tags` is stored as a JSON column (SQLite has no native array type).
-- `app/schemas.py` — Pydantic v2 request/response models (`TodoCreate`, `TodoUpdate` with all-optional fields for partial updates, `TodoResponse`, `TodoListResponse` for the paginated list envelope).
-- `app/crud.py` — DB access functions taking a `Session` and returning ORM objects; no business logic in the route handlers themselves.
-- `app/main.py` — FastAPI app and route definitions; wires `Depends(get_db)` for per-request sessions.
+- `app/database.py` — SQLAlchemy engine/session setup. SQLite file `todos.db` is created in the project root on first run (`Base.metadata.create_all` in `main.py`, no migrations/Alembic — schema changes require deleting the local `todos.db`).
+- `app/models.py` — SQLAlchemy `User` and `Todo` models plus `PriorityEnum` (low/medium/high). Every `Todo` has a required `owner_id` FK to `User`. `tags` is stored as a JSON column (SQLite has no native array type).
+- `app/schemas.py` — Pydantic v2 request/response models (`TodoCreate`, `TodoUpdate` with all-optional fields for partial updates, `TodoResponse`, `TodoListResponse` for the paginated list envelope, `UserCreate`/`UserResponse`/`Token` for auth).
+- `app/auth.py` — password hashing (`bcrypt`, called directly rather than via `passlib` — `passlib`'s bcrypt backend detection is broken against `bcrypt>=4.1`, see https://github.com/pyca/bcrypt/issues/684), JWT creation/verification (`pyjwt`), and the `get_current_user` dependency (`OAuth2PasswordBearer`, reads `SECRET_KEY` from the environment — insecure dev default if unset).
+- `app/crud.py` — DB access functions taking a `Session` and returning ORM objects; no business logic in the route handlers themselves. All todo functions take `owner_id` and scope every query to it.
+- `app/main.py` — FastAPI app and route definitions; wires `Depends(get_db)` for per-request sessions and `Depends(auth.get_current_user)` on every `/todos` route.
 
-Request flow: route handler in `main.py` → `crud.py` function (raw SQLAlchemy query against `models.Todo`) → ORM object returned and serialized via the `schemas.py` response model. 404s are raised directly in `main.py` when `crud.get_todo` returns `None`; validation errors (422) are handled automatically by Pydantic/FastAPI.
+Request flow: route handler in `main.py` → `crud.py` function (raw SQLAlchemy query against `models.Todo`, filtered by the current user's `owner_id`) → ORM object returned and serialized via the `schemas.py` response model. 404s are raised directly in `main.py` when `crud.get_todo` returns `None` (including when the todo exists but belongs to another user — this is deliberate, to avoid leaking existence); validation errors (422) are handled automatically by Pydantic/FastAPI; 401s come from `auth.get_current_user` for missing/invalid/expired tokens.
 
-`GET /todos` supports pagination (`skip`/`limit`), a `completed` boolean filter, and substring search (`q`) across title/description — all implemented in `crud.list_todos`.
+`GET /todos` supports pagination (`skip`/`limit`), a `completed` boolean filter, and substring search (`q`) across title/description — all implemented in `crud.list_todos`, always scoped to the authenticated user.
+
+Auth flow: `POST /auth/register` (email + password) → `POST /auth/login` (OAuth2 password form: `username`=email, `password`) returns a JWT bearer token, 60 min expiry → send it as `Authorization: Bearer <token>` on every `/todos` request.
