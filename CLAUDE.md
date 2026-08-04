@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Implemented: a FastAPI + SQLite Todo REST API with JWT-based auth (each Todo belongs to the authenticated user). Stack choices made (package manager: pip + `requirements.txt`; ORM: SQLAlchemy).
+Implemented: a FastAPI + Postgres (Render free plan in production, SQLite fallback for local dev) Todo REST API with JWT-based auth (each Todo belongs to the authenticated user). Stack choices made (package manager: pip + `requirements.txt`; ORM: SQLAlchemy).
 
 ## Commands
 
@@ -16,6 +16,9 @@ pip install -r requirements.txt
 
 # Set a real secret in production — falls back to an insecure dev default otherwise
 # export SECRET_KEY=<random-value>   (Render: set via render.yaml's generateValue)
+
+# By default connects to local SQLite. To use Postgres locally, set DATABASE_URL
+# to a postgres:// or postgresql:// connection string before running.
 
 # Run (dev server with reload)
 uvicorn app.main:app --reload
@@ -30,7 +33,7 @@ There is no linter, formatter, or automated test suite configured yet. If one is
 
 Small layered FastAPI app under `app/`:
 
-- `app/database.py` — SQLAlchemy engine/session setup. SQLite file `todos.db` is created in the project root on first run (`Base.metadata.create_all` in `main.py`, no migrations/Alembic — schema changes require deleting the local `todos.db`).
+- `app/database.py` — SQLAlchemy engine/session setup. Reads `DATABASE_URL` from the environment (Render Postgres in production, provisioned via `render.yaml`'s `databases` section — free plan; Render's free Postgres instances expire 30 days after creation and must be recreated/reconnected manually); falls back to a local SQLite file `todos.db` in the project root when unset. A `postgres://` URL is rewritten to `postgresql://` since SQLAlchemy 2.0 requires the latter. Tables are created on first run via `Base.metadata.create_all` in `main.py` — no migrations/Alembic, so schema changes require dropping/recreating tables (delete the local `todos.db` for SQLite, or drop tables manually for Postgres).
 - `app/models.py` — SQLAlchemy `User` and `Todo` models plus `PriorityEnum` (low/medium/high). Every `Todo` has a required `owner_id` FK to `User`. `tags` is stored as a JSON column (SQLite has no native array type).
 - `app/schemas.py` — Pydantic v2 request/response models (`TodoCreate`, `TodoUpdate` with all-optional fields for partial updates, `TodoResponse`, `TodoListResponse` for the paginated list envelope, `UserCreate`/`UserResponse`/`Token` for auth).
 - `app/auth.py` — password hashing (`bcrypt`, called directly rather than via `passlib` — `passlib`'s bcrypt backend detection is broken against `bcrypt>=4.1`, see https://github.com/pyca/bcrypt/issues/684), JWT creation/verification (`pyjwt`), and the `get_current_user` dependency (`OAuth2PasswordBearer`, reads `SECRET_KEY` from the environment — insecure dev default if unset).
