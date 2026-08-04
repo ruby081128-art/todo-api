@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 
 from sqlalchemy import or_
@@ -8,6 +9,15 @@ from app import auth, models, schemas
 
 def create_user(db: Session, user: schemas.UserCreate) -> models.User:
     db_user = models.User(email=user.email, hashed_password=auth.hash_password(user.password))
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+def create_guest_user(db: Session) -> models.User:
+    email = f"guest-{uuid.uuid4().hex}@guest.local"
+    db_user = models.User(email=email, hashed_password=auth.hash_password(uuid.uuid4().hex))
     db.add(db_user)
     db.commit()
     db.refresh(db_user)

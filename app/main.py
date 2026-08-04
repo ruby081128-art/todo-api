@@ -1,6 +1,8 @@
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -11,12 +13,26 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Todo API", version="1.0.0")
 
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return FileResponse(STATIC_DIR / "index.html")
+
 
 @app.post("/auth/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     if crud.get_user_by_email(db, user.email):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
     return crud.create_user(db, user)
+
+
+@app.post("/auth/guest", response_model=schemas.Token)
+def guest_login(db: Session = Depends(get_db)):
+    user = crud.create_guest_user(db)
+    token = auth.create_access_token(subject=user.email, expire_minutes=auth.GUEST_TOKEN_EXPIRE_MINUTES)
+    return schemas.Token(access_token=token)
 
 
 @app.post("/auth/login", response_model=schemas.Token)

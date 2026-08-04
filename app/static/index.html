@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Todo</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.4rem; }
+  form { display: flex; gap: 8px; margin-bottom: 20px; }
+  input[type=text] { flex: 1; padding: 8px; font-size: 1rem; }
+  button { padding: 8px 14px; font-size: 1rem; cursor: pointer; }
+  ul { list-style: none; padding: 0; }
+  li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #8884; }
+  li span.title { flex: 1; }
+  li.completed span.title { text-decoration: line-through; opacity: 0.6; }
+  li button { background: none; border: none; font-size: 1.1rem; }
+  #empty { opacity: 0.6; padding: 12px 0; }
+  #error { color: #d33; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<h1>내 할일</h1>
+<form id="new-todo-form">
+  <input type="text" id="title-input" placeholder="할 일을 입력하세요" required maxlength="200">
+  <button type="submit">추가</button>
+</form>
+<div id="error"></div>
+<div id="empty" hidden>할 일이 없습니다.</div>
+<ul id="todo-list"></ul>
+
+<script>
+const API = "";
+const TOKEN_KEY = "todo_token";
+
+async function getToken() {
+  let token = localStorage.getItem(TOKEN_KEY);
+  if (token) return token;
+  const res = await fetch(`${API}/auth/guest`, { method: "POST" });
+  if (!res.ok) throw new Error("게스트 로그인 실패");
+  const data = await res.json();
+  localStorage.setItem(TOKEN_KEY, data.access_token);
+  return data.access_token;
+}
+
+async function authFetch(path, options = {}) {
+  const token = await getToken();
+  const headers = Object.assign({}, options.headers, { Authorization: `Bearer ${token}` });
+  let res = await fetch(`${API}${path}`, { ...options, headers });
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    const newToken = await getToken();
+    res = await fetch(`${API}${path}`, { ...options, headers: { ...headers, Authorization: `Bearer ${newToken}` } });
+  }
+  return res;
+}
+
+function showError(msg) {
+  document.getElementById("error").textContent = msg || "";
+}
+
+async function loadTodos() {
+  showError("");
+  const res = await authFetch("/todos?limit=100");
+  if (!res.ok) { showError("목록을 불러오지 못했습니다."); return; }
+  const data = await res.json();
+  renderTodos(data.items);
+}
+
+function renderTodos(items) {
+  const list = document.getElementById("todo-list");
+  const empty = document.getElementById("empty");
+  list.innerHTML = "";
+  empty.hidden = items.length !== 0;
+  for (const todo of items) {
+    const li = document.createElement("li");
+    li.className = todo.completed ? "completed" : "";
+
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = todo.completed;
+    check.addEventListener("change", () => toggleTodo(todo.id, check.checked));
+
+    const span = document.createElement("span");
+    span.className = "title";
+    span.textContent = todo.title;
+
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.title = "삭제";
+    del.addEventListener("click", () => deleteTodo(todo.id));
+
+    li.append(check, span, del);
+    list.appendChild(li);
+  }
+}
+
+async function toggleTodo(id, completed) {
+  showError("");
+  const res = await authFetch(`/todos/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ completed }),
+  });
+  if (!res.ok) { showError("업데이트에 실패했습니다."); return; }
+  loadTodos();
+}
+
+async function deleteTodo(id) {
+  showError("");
+  const res = await authFetch(`/todos/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 204) { showError("삭제에 실패했습니다."); return; }
+  loadTodos();
+}
+
+document.getElementById("new-todo-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("title-input");
+  const title = input.value.trim();
+  if (!title) return;
+  showError("");
+  const res = await authFetch("/todos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) { showError("할 일 추가에 실패했습니다."); return; }
+  input.value = "";
+  loadTodos();
+});
+
+loadTodos().catch(() => showError("게스트 로그인에 실패했습니다."));
+</script>
+</body>
+</html>
